@@ -1,0 +1,19 @@
+# Rust 编译产物
+/target/
+
+# macOS 系统文件 & 应用包
+.DS_Store
+*.app/
+*.dSYM/
+
+# Windows 可执行文件
+*.exe
+*.pdb
+
+# OCR 结果目录 (避免把测试结果传上去)
+ocr_results_*/
+lumi_ocr_results_*/
+
+# 临时文件
+*.log
+*.tmp
