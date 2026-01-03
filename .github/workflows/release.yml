@@ -20,17 +20,17 @@ jobs:
           - name: Windows
             os: windows-latest
             target: x86_64-pc-windows-msvc
-            bin: lumi-ocr.exe
+            bin: OCR-eg.exe
             name_suffix: .exe
           - name: macOS
             os: macos-latest
             target: x86_64-apple-darwin
-            bin: lumi-ocr
+            bin: OCR-eg
             name_suffix: ""
           - name: Linux
             os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            bin: lumi-ocr
+            bin: OCR-eg
             name_suffix: ""
 
     steps:
@@ -55,17 +55,17 @@ jobs:
         run: |
           mkdir -p release
           if [ "${{ runner.os }}" == "Windows" ]; then
-            cp target/${{ matrix.platform.target }}/release/${{ matrix.platform.bin }} release/lumi-ocr-windows.exe
+            cp target/${{ matrix.platform.target }}/release/${{ matrix.platform.bin }} release/ocr-eg-windows.exe
           elif [ "${{ runner.os }}" == "macOS" ]; then
-            cp target/${{ matrix.platform.target }}/release/${{ matrix.platform.bin }} release/lumi-ocr-macos
+            cp target/${{ matrix.platform.target }}/release/${{ matrix.platform.bin }} release/ocr-eg-macos
           else
-            cp target/${{ matrix.platform.target }}/release/${{ matrix.platform.bin }} release/lumi-ocr-linux
+            cp target/${{ matrix.platform.target }}/release/${{ matrix.platform.bin }} release/ocr-eg-linux
           fi
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: lumi-ocr-${{ matrix.platform.name }}
+          name: ocr-eg-${{ matrix.platform.name }}
           path: release/*
 
   create_release:
@@ -87,9 +87,9 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            artifacts/lumi-ocr-Windows/lumi-ocr-windows.exe
-            artifacts/lumi-ocr-macOS/lumi-ocr-macos
-            artifacts/lumi-ocr-Linux/lumi-ocr-linux
+            artifacts/ocr-eg-Windows/ocr-eg-windows.exe
+            artifacts/ocr-eg-macOS/ocr-eg-macos
+            artifacts/ocr-eg-Linux/ocr-eg-linux
           draft: true
           prerelease: false
         env:
