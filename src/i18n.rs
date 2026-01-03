@@ -75,7 +75,7 @@ impl I18n {
         en.insert("cancel".into(), "Cancel".into());
         en.insert("show".into(), "Show".into());
         en.insert("hide".into(), "Hide".into());
-        en.insert("ocr_result_dir".into(), "lumi_ocr_results_".into());
+        en.insert("ocr_result_dir".into(), "ocr_results_".into());
         en.insert("success_all_files_done".into(), "All files processed successfully!".into());
         
         translations.insert("en_US".into(), en);
