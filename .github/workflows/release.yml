@@ -23,17 +23,17 @@ jobs:
           - name: Windows
             os: windows-latest
             target: x86_64-pc-windows-msvc
-            bin: OCR-eg.exe
+            bin: ocr-eg.exe
             name_suffix: .exe
           - name: macOS
             os: macos-latest
             target: x86_64-apple-darwin
-            bin: OCR-eg
+            bin: ocr-eg
             name_suffix: ""
           - name: Linux
             os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            bin: OCR-eg
+            bin: ocr-eg
             name_suffix: ""
 
     steps:

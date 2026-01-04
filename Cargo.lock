@@ -3,31 +3,6 @@
 version = 4
 
 [[package]]
-name = "OCR-eg"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64",
- "confy",
- "eframe",
- "futures",
- "image 0.24.9",
- "lopdf 0.33.0",
- "open",
- "path-clean",
- "printpdf",
- "reqwest",
- "rfd",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "uuid",
- "walkdir",
- "winres",
-]
-
-[[package]]
 name = "ab_glyph"
 version = "0.2.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2930,6 +2905,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c92d4ddb4bd7b50d730c215ff871754d0da6b2178849f8a2a2ab69712d0c073b"
 dependencies = [
  "objc",
+]
+
+[[package]]
+name = "ocr-eg"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64",
+ "confy",
+ "eframe",
+ "futures",
+ "image 0.24.9",
+ "lopdf 0.33.0",
+ "open",
+ "path-clean",
+ "printpdf",
+ "reqwest",
+ "rfd",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
+ "walkdir",
+ "winres",
 ]
 
 [[package]]

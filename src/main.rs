@@ -1,15 +1,16 @@
-mod mistral_api;
+mod providers;
 mod pdf_utils;
 mod config;
 mod i18n;
 
 use std::path::{Path, PathBuf};
 use eframe::egui;
-use mistral_api::MistralClient;
+use providers::{OcrProvider, OcrResult, mistral::MistralProvider};
 use config::{AppConfig, load_config, save_config};
 use i18n::I18n;
 use tokio::sync::mpsc;
 use base64::{engine::general_purpose, Engine as _};
+use std::sync::Arc;
 
 struct AppState {
     config: AppConfig,
@@ -25,6 +26,9 @@ struct AppState {
     show_key: bool,
     last_output_dirs: Vec<PathBuf>,
     receiver: Option<mpsc::Receiver<ProgressUpdate>>,
+    
+    // Available providers
+    available_providers: Vec<Box<dyn OcrProvider>>,
 }
 
 impl AppState {
@@ -34,6 +38,11 @@ impl AppState {
         let i18n = I18n::new(&config.language);
         let output_path = std::env::current_dir().unwrap_or_default();
         let status_message = i18n.t("ready").to_string();
+        
+        // Register providers here. Currently only Mistral.
+        // We use a dummy key for registration, the actual key is injected during processing.
+        let mistral = Box::new(MistralProvider::new("".to_string()));
+        let available_providers: Vec<Box<dyn OcrProvider>> = vec![mistral];
         
         Self {
             config,
@@ -49,7 +58,17 @@ impl AppState {
             show_key: false,
             last_output_dirs: Vec::new(),
             receiver: None,
+            available_providers,
         }
+    }
+
+    fn get_active_provider_name(&self) -> String {
+        for p in &self.available_providers {
+            if p.id() == self.config.active_provider {
+                return p.name().to_string();
+            }
+        }
+        "Unknown".to_string()
     }
 }
 
@@ -129,9 +148,10 @@ impl AppState {
         ui.horizontal(|ui| {
             ui.heading(self.i18n.t("header_title"));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Language Selector
                 let mut lang = self.config.language.clone();
                 let mut changed = false;
-                egui::ComboBox::from_label(self.i18n.t("language"))
+                egui::ComboBox::from_id_source("lang_combo")
                     .selected_text(if lang == "zh_CN" { "简体中文" } else { "English" })
                     .show_ui(ui, |ui| {
                         if ui.selectable_value(&mut lang, "zh_CN".into(), "简体中文").clicked() { changed = true; }
@@ -141,6 +161,26 @@ impl AppState {
                 if changed && lang != self.config.language {
                     self.config.language = lang;
                     self.i18n.set_lang(&self.config.language);
+                    let _ = save_config(&self.config);
+                }
+
+                ui.separator();
+
+                // Provider Selector
+                let mut provider_id = self.config.active_provider.clone();
+                let mut provider_changed = false;
+                egui::ComboBox::from_id_source("provider_combo")
+                    .selected_text(self.get_active_provider_name())
+                    .show_ui(ui, |ui| {
+                        for p in &self.available_providers {
+                            if ui.selectable_value(&mut provider_id, p.id().to_string(), p.name()).clicked() {
+                                provider_changed = true;
+                            }
+                        }
+                    });
+                
+                if provider_changed {
+                    self.config.active_provider = provider_id;
                     let _ = save_config(&self.config);
                 }
             });
@@ -253,7 +293,9 @@ impl AppState {
         ui.horizontal(|ui| {
             let start_btn = ui.add_enabled(!self.is_processing && !self.file_queue.is_empty(), egui::Button::new(self.i18n.t("start_process")));
             if start_btn.clicked() {
-                if self.config.api_key.is_none() {
+                // Check if key exists for current provider
+                let current_key = self.config.api_keys.get(&self.config.active_provider).cloned().unwrap_or_default();
+                if current_key.is_empty() {
                     self.show_api_modal = true;
                 } else {
                     self.start_processing(ui.ctx().clone());
@@ -261,7 +303,7 @@ impl AppState {
             }
 
             if ui.button(self.i18n.t("set_api_key")).clicked() {
-                self.temp_api_key = self.config.api_key.clone().unwrap_or_default();
+                self.temp_api_key = self.config.api_keys.get(&self.config.active_provider).cloned().unwrap_or_default();
                 self.show_api_modal = true;
             }
 
@@ -278,7 +320,10 @@ impl AppState {
     }
 
     fn render_api_modal(&mut self, ctx: &egui::Context) {
-        egui::Window::new(self.i18n.t("api_key_title"))
+        let provider_name = self.get_active_provider_name();
+        let title = format!("{} {} API Key", self.i18n.t("set_api_key"), provider_name);
+        
+        egui::Window::new(title)
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -290,13 +335,18 @@ impl AppState {
                         self.show_key = !self.show_key;
                     }
                 });
-                ui.hyperlink_to(self.i18n.t("apply_here"), "https://console.mistral.ai/");
+                
+                // Show link only for Mistral for now, or make it dynamic
+                if self.config.active_provider == "mistral" {
+                    ui.hyperlink_to(self.i18n.t("apply_here"), "https://console.mistral.ai/");
+                }
+                
                 ui.label(self.i18n.t("api_activation_note"));
                 
                 ui.horizontal(|ui| {
                     if ui.button(self.i18n.t("save")).clicked() {
                         if !self.temp_api_key.trim().is_empty() {
-                            self.config.api_key = Some(self.temp_api_key.trim().to_string());
+                            self.config.api_keys.insert(self.config.active_provider.clone(), self.temp_api_key.trim().to_string());
                             let _ = save_config(&self.config);
                             self.show_api_modal = false;
                         }
@@ -311,7 +361,10 @@ impl AppState {
     fn start_processing(&mut self, ctx: egui::Context) {
         self.is_processing = true;
         self.last_output_dirs.clear();
-        let api_key = self.config.api_key.clone().unwrap();
+        
+        let provider_id = self.config.active_provider.clone();
+        let api_key = self.config.api_keys.get(&provider_id).cloned().unwrap_or_default();
+        
         let files = self.file_queue.clone();
         let output_base = self.output_path.clone();
         let ocr_prefix = self.i18n.t("ocr_result_dir").to_string();
@@ -320,7 +373,18 @@ impl AppState {
         self.receiver = Some(rx);
 
         tokio::spawn(async move {
-            let client = MistralClient::new(api_key);
+            // Instantiate the correct provider
+            let provider: Box<dyn OcrProvider> = if provider_id == "mistral" {
+                Box::new(MistralProvider::new(api_key))
+            } else {
+                // Fallback or panic
+                let _ = tx.send(ProgressUpdate::Error(format!("Unknown provider: {}", provider_id))).await;
+                return;
+            };
+            
+            // Shared reference to provider
+            let provider = Arc::new(provider);
+
             let total_files = files.len();
             let mut results = Vec::new();
 
@@ -328,7 +392,7 @@ impl AppState {
                 let _ = tx.send(ProgressUpdate::Total((i as f32) / (total_files as f32))).await;
                 let _ = tx.send(ProgressUpdate::Message(format!("Processing {}...", file_path.file_name().unwrap_or_default().to_string_lossy()))).await;
                 
-                match process_single_file(&client, file_path, &output_base, &ocr_prefix, &tx).await {
+                match process_single_file(provider.clone(), file_path, &output_base, &ocr_prefix, &tx).await {
                     Ok(out_dir) => results.push(out_dir),
                     Err(e) => {
                         let _ = tx.send(ProgressUpdate::Error(format!("Error: {}", e))).await;
@@ -345,8 +409,9 @@ impl AppState {
     }
 }
 
+// Logic extracted and adapted for generic provider
 async fn process_single_file(
-    client: &MistralClient,
+    provider: Arc<Box<dyn OcrProvider>>,
     path: &Path,
     output_base: &Path,
     ocr_prefix: &str,
@@ -371,7 +436,7 @@ async fn process_single_file(
 
     let size_mb = pdf_utils::get_pdf_size_mb(&actual_path)?;
     if size_mb <= 45.0 {
-        process_chunk(client, &actual_path, &out_dir, 0, tx).await?;
+        process_chunk(provider, &actual_path, &out_dir, 0, tx).await?;
     } else {
         let _ = tx.send(ProgressUpdate::Message("Splitting large PDF...".into())).await;
         let (chunks, _temp_dir) = pdf_utils::split_pdf(&actual_path, 45.0)?;
@@ -380,7 +445,7 @@ async fn process_single_file(
         
         for (i, chunk) in chunks.iter().enumerate() {
             let _ = tx.send(ProgressUpdate::Message(format!("Processing chunk {}/{}:..", i+1, chunks.len()))).await;
-            let partial_file = process_chunk(client, chunk, &out_dir, page_offset, tx).await?;
+            let partial_file = process_chunk(provider.clone(), chunk, &out_dir, page_offset, tx).await?;
             partial_files.push(partial_file);
             
             let doc = ::lopdf::Document::load(chunk)?;
@@ -394,56 +459,51 @@ async fn process_single_file(
 }
 
 async fn process_chunk(
-    client: &MistralClient,
+    provider: Arc<Box<dyn OcrProvider>>,
     path: &Path,
     out_dir: &Path,
     page_offset: u32,
     tx: &mpsc::Sender<ProgressUpdate>
 ) -> anyhow::Result<PathBuf> {
     let _ = tx.send(ProgressUpdate::Current(0.1)).await;
-    let upload = client.upload_file(path).await?;
-    let _ = tx.send(ProgressUpdate::Current(0.3)).await;
-    let url = client.get_signed_url(&upload.id).await?;
-    let _ = tx.send(ProgressUpdate::Current(0.5)).await;
-    let ocr = client.process_ocr(url).await?;
-    let _ = tx.send(ProgressUpdate::Current(0.8)).await;
+    // The provider interface handles the complex steps (upload, sign, ocr) internally
+    let result = provider.process_file(path).await?;
+    let _ = tx.send(ProgressUpdate::Current(0.9)).await;
     
-    let partial_md = save_ocr_results(ocr, out_dir, page_offset)?;
+    let partial_md = save_ocr_results(result, out_dir, page_offset)?;
     Ok(partial_md)
 }
 
-fn save_ocr_results(ocr: mistral_api::OCRResponse, out_dir: &Path, page_offset: u32) -> anyhow::Result<PathBuf> {
+fn save_ocr_results(ocr_result: OcrResult, out_dir: &Path, page_offset: u32) -> anyhow::Result<PathBuf> {
     let images_dir = out_dir.join("images");
     std::fs::create_dir_all(&images_dir)?;
     
     let mut page_markdowns = Vec::new();
-    for (i, page) in ocr.pages.into_iter().enumerate() {
+    for (i, page) in ocr_result.pages.into_iter().enumerate() {
         let mut md = page.markdown;
         for img in page.images {
-            if let Some(base64_data) = img.image_base64 {
-                let data = if base64_data.contains(",") {
-                    base64_data.split(',').nth(1).unwrap_or("")
-                } else {
-                    &base64_data
-                };
-                
-                let bytes = general_purpose::STANDARD.decode(data)?;
-                let img_filename = format!("part{}_page{}_{}.png", page_offset, i, img.id);
-                std::fs::write(images_dir.join(&img_filename), bytes)?;
-                
-                // Replace in markdown
-                // Mistral OCR returns placeholders like ![img_id](img_id)
-                let old_placeholder = format!("![{}]({})", img.id, img.id);
-                let new_placeholder = format!("![{}](images/{})", img.id, img_filename);
-                md = md.replace(&old_placeholder, &new_placeholder);
-                
-                // Sometimes it might have a leading slash
-                let old_placeholder_slash = format!("![{}](/{})", img.id, img.id);
-                md = md.replace(&old_placeholder_slash, &new_placeholder);
-            }
+             let data = if img.base64.contains(",") {
+                img.base64.split(',').nth(1).unwrap_or("")
+            } else {
+                &img.base64
+            };
+            
+            let bytes = general_purpose::STANDARD.decode(data)?;
+            let img_filename = format!("part{}_page{}_{}.png", page_offset, i, img.id);
+            std::fs::write(images_dir.join(&img_filename), bytes)?;
+            
+            // Replace in markdown
+            let old_placeholder = format!("![{}]({})", img.id, img.id);
+            let new_placeholder = format!("![{}](images/{})", img.id, img_filename);
+            md = md.replace(&old_placeholder, &new_placeholder);
+            
+            let old_placeholder_slash = format!("![{}](/{})", img.id, img.id);
+            md = md.replace(&old_placeholder_slash, &new_placeholder);
         }
         let actual_page = page_offset + i as u32 + 1;
-        page_markdowns.push(format!("## Page {}\n\n{}", actual_page, md));
+        page_markdowns.push(format!("## Page {}
+
+{}", actual_page, md));
     }
     
     let partial_md_path = out_dir.join(format!("part_{}.md", page_offset));
